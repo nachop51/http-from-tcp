@@ -3,8 +3,8 @@ package request
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"httpfromtcp/internal/headers"
@@ -14,6 +14,7 @@ const bufferSize int = 8
 const (
 	requestInit = iota
 	requestParsingHeaders
+	requestParsingBody
 	requestStateDone
 )
 
@@ -36,12 +37,18 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 
 	var req Request = Request{
 		state: requestInit,
+		Body:  nil,
 	}
 
 	for req.state != requestStateDone {
 		read, err := reader.Read(buf[readToIndex:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if req.state == requestParsingBody {
+					if strconv.Itoa(len(req.Body)) != req.Headers["content-length"] {
+						return nil, errors.New("unexpected EOF while reading body")
+					}
+				}
 				req.state = requestStateDone
 				break
 			}
@@ -103,7 +110,7 @@ func (r *Request) parseNext(data []byte) (int, error) {
 			return 0, nil
 		}
 		r.state = requestParsingHeaders
-		fmt.Println("Parsed request line:", r.RequestLine, "took", read, "bytes")
+
 		return read, nil
 	case requestParsingHeaders:
 		read, done, err := r.parseHeaders(data)
@@ -114,14 +121,57 @@ func (r *Request) parseNext(data []byte) (int, error) {
 			return 0, nil
 		}
 		if done {
-			r.state = requestStateDone
+			r.state = requestParsingBody
 		}
+		return read, nil
+	case requestParsingBody:
+		read, done, err := r.parseBody(data)
+		if done {
+			r.state = requestStateDone
+			return read, nil
+		}
+
+		if err != nil {
+			return 0, err
+		}
+		if read == 0 {
+			return 0, nil
+		}
+
 		return read, nil
 	case requestStateDone:
 		return 0, errors.New("error: trying to read data in a done state")
 	}
 
 	return 0, errors.New("error: unknown state")
+}
+
+func (r *Request) parseBody(data []byte) (int, bool, error) {
+	contentLengthStr, ok := r.Headers.Get("Content-Length")
+	if !ok {
+		return 0, true, nil
+	}
+
+	contentLength, err := strconv.Atoi(contentLengthStr)
+	if err != nil || contentLength < 0 {
+		return 0, false, errors.New("invalid content-length header NaN or negative")
+	}
+
+	if r.Body == nil {
+		r.Body = make([]byte, 0)
+	}
+
+	r.Body = append(r.Body, data...)
+
+	if len(r.Body) > contentLength {
+		return 0, false, errors.New("body is greater than the content-length specified")
+	}
+
+	if len(r.Body) == contentLength {
+		return len(data), true, nil
+	}
+
+	return len(data), false, nil
 }
 
 func (r *Request) parseHeaders(data []byte) (int, bool, error) {

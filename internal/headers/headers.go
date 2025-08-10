@@ -3,7 +3,6 @@ package headers
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -33,8 +32,6 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 
 	trimmed := bytes.Trim(data[:newLineIdx], " ")
 	parts := strings.Split(string(trimmed), ":")
-
-	fmt.Println(parts)
 
 	if len(parts) < 2 {
 		return 0, false, errors.New("malformed header: correct way: field-name: field-line-value")
@@ -69,4 +66,9 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	}
 
 	return len(data[:newLineIdx]) + 2, false, nil
+}
+
+func (h Headers) Get(key string) (string, bool) {
+	value, ok := h[strings.ToLower(key)]
+	return value, ok
 }
